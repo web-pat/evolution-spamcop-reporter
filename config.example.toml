@@ -1,0 +1,56 @@
+# Copy with mode 0600, or run `spamreporter init` for the complete built-in template.
+# Never commit your edited configuration or personal SpamCop token.
+backend = "eml" # Offline default. Also supports evolution and sendmail.
+recipient = "" # Your confidential regular submit.TOKEN@spamcop.net address.
+allow_send = false
+allow_automatic = false # Transport of already reviewed messages only.
+sendmail = ["/usr/sbin/sendmail", "-i"] # Argument array; no shell, no -t, no recipients.
+daily_limit = 20 # Rolling 24h attempt limit, including editor launches and failures.
+max_input_bytes = 10000000
+asn_csv = "" # Optional local CSV: network,asn,operator. No network lookups.
+# data_dir = "~/private-spamreporter" # Default follows XDG_DATA_HOME.
+
+[identities]
+default = "reporter@example.net" # Synthetic examples; configure a real identity locally.
+work = "reporter@example.org"
+
+[[sources]]
+name = "evolution"
+kind = "stdin"
+enabled = true
+auto_submit = false
+retention_days = 30
+identity = "default"
+domain = "example.net" # Administrative metadata; supports merged forwarding accounts.
+[sources.trusted_hosts]
+"mx.example.net" = ["192.0.2.0/24"] # Replace with verified receiver networks.
+"forward.example.org" = ["2001:db8::/32"] # Exact forwarder names AND peer networks.
+
+[[sources]]
+name = "exports"
+kind = "eml"
+path = "~/Mail/spam-exports" # Single EML or recursive directory.
+enabled = false # Enable after configuring the source.
+auto_submit = false
+retention_days = 14
+identity = "default"
+domain = "example.net"
+
+[[sources]]
+name = "work-junk"
+kind = "maildir" # Must contain cur/new/tmp; NOT the Evolution IMAP cache.
+path = "~/Mail/work-junk"
+enabled = false
+auto_submit = false
+retention_days = 30
+identity = "work"
+domain = "example.org"
+
+[[sources]]
+name = "mbox-export"
+kind = "mbox" # Static export only; not a concurrently written mailbox.
+path = "~/Mail/spam-export.mbox"
+enabled = false
+auto_submit = false
+retention_days = 14
+identity = "default"

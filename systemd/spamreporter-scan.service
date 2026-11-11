@@ -1,0 +1,14 @@
+[Unit]
+Description=Capture and analyze local spam candidates (no sending)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/spamreporter scan
+ExecStart=%h/.local/bin/spamreporter analyze
+ExecStart=%h/.local/bin/spamreporter cleanup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/spamreporter
+RestrictAddressFamilies=AF_UNIX

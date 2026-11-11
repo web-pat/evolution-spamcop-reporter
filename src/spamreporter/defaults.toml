@@ -1,0 +1,59 @@
+# Private configuration. chmod 600 this file; use simple non-personal source names.
+# Defaults use $XDG_DATA_HOME/spamreporter (or ~/.local/share/spamreporter).
+# data_dir = "~/private-spamreporter"
+backend = "eml" # eml, evolution, sendmail
+recipient = "" # Your confidential submit.TOKEN@spamcop.net; never commit it.
+allow_send = false # Explicitly enable a separately configured local MTA.
+allow_automatic = false # Applies only to messages you explicitly reviewed/queued.
+sendmail = ["/usr/sbin/sendmail", "-i"] # No shell; do not add -t or recipients.
+daily_limit = 20 # Rolling 24-hour transport/editor attempts, including failures.
+max_input_bytes = 10000000
+# Optional offline CSV: network,asn,operator. No external lookups are implemented.
+asn_csv = ""
+
+[identities]
+default = "reporter@example.net" # Synthetic; replace with your sending identity.
+work = "reporter@example.org"
+
+[[sources]]
+name = "evolution"
+kind = "stdin"
+enabled = true
+auto_submit = false
+retention_days = 30
+identity = "default"
+domain = "example.net" # Metadata only; forwarding aliases need not be enumerated.
+# Exact trusted receiving hosts, with their observed IP networks. Empty arrays
+# allow a top-level receiver anchor but not a trusted forwarding hop.
+[sources.trusted_hosts]
+"mx.example.net" = ["192.0.2.0/24"]
+"forward.example.org" = ["2001:db8::/32"]
+
+[[sources]]
+name = "exports"
+kind = "eml" # A single EML file or directory, recursively scanned.
+path = "~/Mail/spam-exports"
+enabled = false # Enable only after creating and reviewing this source.
+auto_submit = false
+retention_days = 14
+identity = "default"
+domain = "example.net"
+
+[[sources]]
+name = "work-junk"
+kind = "maildir" # Genuine Maildir only, NEVER an Evolution IMAP cache.
+path = "~/Mail/work-junk"
+enabled = false
+auto_submit = false
+retention_days = 30
+identity = "work"
+domain = "example.org"
+
+[[sources]]
+name = "mbox-export"
+kind = "mbox" # A static Evolution export; not a live, concurrently written mbox.
+path = "~/Mail/spam-export.mbox"
+enabled = false
+auto_submit = false
+retention_days = 14
+identity = "default"

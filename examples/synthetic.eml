@@ -1,0 +1,11 @@
+Received: from sender.example (sender.example [192.0.2.20]) by mx.example.net; Wed, 11 Nov 2026 10:00:00 +0000
+From: Synthetic Sender <sender@example.org>
+To: Synthetic Recipient <recipient@example.net>
+Date: Wed, 11 Nov 2026 10:00:00 +0000
+Message-ID: <synthetic-example@example.org>
+Subject: Synthetic local test - do not submit to SpamCop
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is synthetic test data, not actual unsolicited bulk email.
+Use it only for offline import, analysis and EML generation tests.
