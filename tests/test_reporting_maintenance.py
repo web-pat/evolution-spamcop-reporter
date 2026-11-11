@@ -53,7 +53,7 @@ def test_cleanup_retains_dedup_history(store, cfg, raw):
     assert not (cfg.data_dir / "outbox" / f"{digest}.eml").exists()
     assert store.ingest(raw, "one", "delivery-a") == digest
     assert store.message(digest)["raw"] is None
-    assert store.message(digest)["state"] == "prepared"
+    assert store.message(digest)["state"] == "expired"
 
 
 def test_cleanup_keeps_active_draft(store, cfg, raw):

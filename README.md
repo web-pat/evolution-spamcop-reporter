@@ -47,6 +47,8 @@ at `0600`. Set your sender identity and confidential SpamCop `submit.*` address;
 enable only the sources you intend to inspect. `config.example.toml` explains the
 settings. XDG_CONFIG_HOME and XDG_DATA_HOME are honored; `--config PATH` overrides
 the config location. A custom `data_dir` should be a dedicated private directory.
+Relative paths in TOML resolve relative to the configuration file, consistently
+across Evolution, terminals and systemd. XDG environment paths must be absolute.
 
 ```sh
 spamreporter doctor
@@ -111,7 +113,12 @@ Set an Evolution filter's **Pipe to Program** action to the installed executable
 ```
 
 Use your own absolute path (`command -v spamreporter`). The command only captures
-bytes locally and returns; analysis and transport happen later.
+bytes in a durable private intake spool and returns **with empty stdout**. Camel
+interprets non-empty pipe stdout as a replacement message, so no progress text or
+fingerprint may be printed by a filter wrapper. `ingest --file` still prints its ID.
+Filter intake never waits for the database. `scan`, `analyze`, `queue`, `status` and
+other normal (non-dry-run) commands import pending intake into SQLite before working;
+the supplied timer does this automatically. No mail is approved or sent by intake.
 
 **Automatic IMAP filters apply to new Inbox messages, not arbitrary server-filled
 junk folders.** For these folders select messages and apply filters manually with
@@ -142,6 +149,8 @@ systemctl --user list-timers
 ```
 
 The service assumes pipx's `~/.local/bin/spamreporter` and the default data path.
+Unreadable/oversized files are skipped individually. A partial scan returns exit
+status 2; the service accepts that status so analysis and cleanup still run.
 For custom XDG/data paths, edit `ExecStart`, `Environment` and `ReadWritePaths`
 using `systemctl --user edit spamreporter-scan.service`. A graphical session is
 unnecessary for scan/analysis. For trusted unattended transport of **already
@@ -160,6 +169,18 @@ When copies belong to multiple sources the longest retention applies. Active dra
 and uncertain in-progress handoffs are retained until resolved. Reports you exported
 elsewhere and backups need separate deletion. `cleanup --purge-all --confirm`
 erases all database records and managed exports, **including deduplication history**.
+Expired unsent submissions become `expired` and are excluded from automatic sending.
+
+To retain historical day/month/IP/ASN observations after content expiry, explicitly
+set `retain_statistics=true`. This retains the report-safe fields (including IPs,
+timestamps and domain pseudonyms), not full headers, addresses or bodies. These
+observations remain until a full purge; switching the setting off stops new snapshots
+but does not remove earlier ones. Previously purged observations cannot be recovered.
+
+An EML sent outside the application can be recorded with `status --id HASH --record
+handed_off --evidence receipt.txt --attest` after EML export. For a draft you have
+verified was closed/discarded without sending, record `cancelled` with evidence;
+this allows normal retention without making the message eligible for another send.
 
 ## Limits and trust
 
@@ -175,6 +196,16 @@ erases all database records and managed exports, **including deduplication histo
 * Standard reports omit personal addresses, subjects, full headers and tokens and
   pseudonymize domains. They still contain potentially sensitive IPs and counts.
 * No Quick Reporting, undocumented browser automation or automatic final confirmations.
+
+### Upgrading from the initial 0.1.0 implementation
+
+The SQLite schema is upgraded in place to version 2 (indexes and optional observation
+history). Back up the private data directory with application processes stopped first.
+If your previous TOML used a relative `data_dir`, set its **existing absolute path**
+before upgrading; the previous release resolved it against each process's working
+directory. Also recheck any relative source/ASN paths. Do not downgrade against the
+upgraded database. The documented filter command is unchanged, but stdout is now
+intentionally silent. No automatic permission or spam-review setting is loosened.
 
 ## Development
 

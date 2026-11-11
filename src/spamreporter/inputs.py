@@ -4,7 +4,7 @@ import hashlib
 import mailbox
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import BinaryIO
 
@@ -31,7 +31,14 @@ def read_file(path: Path, limit: int) -> bytes:
         return raw
 
 
-def scan(source: Source, limit: int) -> Iterator[tuple[str, bytes]]:
+def scan(
+    source: Source, limit: int, on_error: Callable[[Exception], None] | None = None
+) -> Iterator[tuple[str, bytes]]:
+    def failed(error: Exception) -> None:
+        if on_error is None:
+            raise error
+        on_error(error)
+
     root = Path(source.path).expanduser()
     if root.is_symlink():
         raise ValueError("Source root must not be a symlink")
@@ -42,8 +49,12 @@ def scan(source: Source, limit: int) -> Iterator[tuple[str, bytes]]:
         box = mailbox.mbox(root, create=False)
         try:
             for key in box.iterkeys():
-                with box.get_file(key, from_=False) as stream:
-                    raw = bounded_read(stream, limit)
+                try:
+                    with box.get_file(key, from_=False) as stream:
+                        raw = bounded_read(stream, limit)
+                except (OSError, ValueError) as exc:
+                    failed(exc)
+                    continue
                 yield hashlib.sha256(f"{root.resolve()}:{key}".encode()).hexdigest(), raw
         finally:
             box.close()
@@ -53,7 +64,7 @@ def scan(source: Source, limit: int) -> Iterator[tuple[str, bytes]]:
         return
     if not root.is_dir():
         raise ValueError("Source directory does not exist")
-    for directory, dirs, files in os.walk(root, followlinks=False):
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=failed):
         dirs[:] = sorted(d for d in dirs if d != "tmp" and not (Path(directory) / d).is_symlink())
         folder = Path(directory)
         if source.kind == "maildir" and not (
@@ -70,6 +81,9 @@ def scan(source: Source, limit: int) -> Iterator[tuple[str, bytes]]:
             try:
                 raw = read_file(path, limit)
             except FileNotFoundError:  # A Maildir message may move from new to cur.
+                continue
+            except (OSError, ValueError) as exc:
+                failed(exc)
                 continue
             if source.kind == "maildir":
                 key = str(folder.parent.resolve() / name.split(":2,", 1)[0])

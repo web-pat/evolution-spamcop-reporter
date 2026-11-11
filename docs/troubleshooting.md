@@ -13,7 +13,7 @@ SpamCop token, full config, personal headers or originals into a public issue.
 | Server-side Spam folder not imported | Apply filters manually (Ctrl+Y) or export; automatic IMAP filtering is Inbox-only. |
 | Filter doesn't execute | Check absolute path, source name, permissions and Flatpak restrictions. Use Pipe to Program, not Run Program. |
 | Maildir scan sees nothing | Confirm real cur/new/tmp layout. Never point it at an IMAP cache. |
-| Scan stops on an oversized input | Review the source; export the problematic message separately. A source error aborts that source for this run; other sources continue. |
+| Scan reports skipped inputs | Unreadable, empty, changing or oversized files are skipped individually. Other files/sources continue; exit 2 means partial failure. The user service accepts 2 and continues analysis/cleanup. |
 | Repeated scan reaches limit | The limit counts newly observed deliveries; known files are read/hashed but do not consume the limit. |
 | Changed source trust configuration | v1 analyzes captured messages; existing observations are historical. Use a separate test data directory to validate new trust rules before production. |
 | Unknown IP/ASN | Expected unless a topmost receiver is explicitly trusted, the chain is parseable, and a public peer exists. ASN requires a local CSV mapping. |
@@ -25,8 +25,13 @@ SpamCop token, full config, personal headers or originals into a public issue.
 | `manual_review` or `handing_off` after send | Outcome uncertain. Check MTA logs and replies. Never blindly resend. |
 | SQLite busy | Wait for the other writer; check local filesystem locking. CLI waits up to 15 seconds. |
 | Report output exists | Choose a new filename or remove the prior export yourself; no implicit overwrite. |
-| Cleanup retains a draft | Resolve the draft/transport outcome first; active external work is excluded. |
+| Cleanup retains a draft | Resolve the draft/transport outcome first. For a verified discarded unsent draft, record `cancelled` with evidence and `--attest`; this does not enable resending. |
 | Timer cannot write custom data path | Update the service's Environment/ReadWritePaths, then daemon-reload. |
+| stdin no longer prints a fingerprint | Intentional: Camel consumes stdout as replacement email. Use `queue` or `status` to drain intake and inspect IDs; file imports still print IDs. |
+| Pending intake files | A normal command or the timer imports `.json` records. Unreadable records and interrupted `.tmp` writes are retained; inspect privately with the filter stopped. |
+| Missing data after changing directories/upgrading | TOML paths now resolve beside the config. If previously relative, point data_dir to the existing absolute database directory before upgrading. |
+| ASN table rejected | Use exactly `network,asn,operator` columns and complete rows with CIDR networks and AS-number values. Errors report a line number without echoing private contents. |
+| Historical statistics disappeared | Default retention removes them. Enable `retain_statistics=true` before expiry for report-safe snapshots; already deleted observations cannot be restored. |
 
 `journalctl --user -u spamreporter-scan.service` shows timer results. It does not
 contain raw message content. `systemctl --user disable --now spamreporter-scan.timer`

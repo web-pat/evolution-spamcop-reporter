@@ -10,13 +10,22 @@ from pathlib import Path
 
 
 def config_path() -> Path:
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / (
-        "spamreporter/config.toml"
-    )
+    return xdg_path("XDG_CONFIG_HOME", Path.home() / ".config") / ("spamreporter/config.toml")
 
 
 def data_path() -> Path:
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "spamreporter"
+    return xdg_path("XDG_DATA_HOME", Path.home() / ".local/share") / "spamreporter"
+
+
+def xdg_path(name: str, fallback: Path) -> Path:
+    value = Path(os.environ.get(name) or fallback).expanduser()
+    # XDG specifies that relative environment values must be ignored.
+    return value if value.is_absolute() else fallback
+
+
+def configured_path(value: str, base: Path) -> Path:
+    expanded = Path(value).expanduser()
+    return Path(os.path.abspath(expanded if expanded.is_absolute() else base / expanded))
 
 
 def private_dir(path: Path) -> None:
@@ -68,6 +77,7 @@ class Config:
     max_input_bytes: int = 10_000_000
     daily_limit: int = 20
     asn_csv: str = ""
+    retain_statistics: bool = False
 
     def source(self, name: str) -> Source:
         if name not in self.sources or not self.sources[name].enabled:
@@ -82,6 +92,7 @@ class Config:
 
 
 def load(path: Path) -> Config:
+    base = path.absolute().parent
     if path.is_symlink() or path.stat().st_uid != os.getuid():
         raise ValueError("Configuration must be owned by you and not a symlink")
     if path.stat().st_mode & 0o077:
@@ -106,8 +117,10 @@ def load(path: Path) -> Config:
             raise ValueError("Source names must be unique simple labels, not email addresses")
         if source.kind not in {"stdin", "eml", "maildir", "mbox"}:
             raise ValueError("Unsupported source kind")
-        if source.retention_days < 1:
-            raise ValueError("Retention must be positive")
+        if not 1 <= source.retention_days <= 36500:
+            raise ValueError("Retention must be between 1 and 36500 days")
+        if source.path:
+            source.path = str(configured_path(source.path, base))
         for host, networks in source.trusted_hosts.items():
             if not re.fullmatch(r"[A-Za-z0-9.-]+", host) or not isinstance(networks, list):
                 raise ValueError(
@@ -117,9 +130,12 @@ def load(path: Path) -> Config:
                 ipaddress.ip_network(network)
         sources[source.name] = source
     if "data_dir" in values:
-        values["data_dir"] = Path(values["data_dir"]).expanduser()
+        values["data_dir"] = configured_path(values["data_dir"], base)
     cfg = Config(sources=sources, **values)
-    if any(type(getattr(cfg, key)) is not bool for key in ("allow_send", "allow_automatic")):
+    if any(
+        type(getattr(cfg, key)) is not bool
+        for key in ("allow_send", "allow_automatic", "retain_statistics")
+    ):
         raise ValueError("Transport permissions must be TOML booleans, not quoted text")
     if any(type(getattr(cfg, key)) is not int for key in ("daily_limit", "max_input_bytes")):
         raise ValueError("Resource limits must be integers")
@@ -140,4 +156,8 @@ def load(path: Path) -> Config:
     # -t would introduce recipients from mutable headers; only our envelope is allowed.
     if "-t" in cfg.sendmail:
         raise ValueError("Do not use sendmail -t; the envelope recipient is supplied explicitly")
+    if cfg.asn_csv:
+        cfg.asn_csv = str(configured_path(cfg.asn_csv, base))
+    if "/" in cfg.sendmail[0] and not Path(cfg.sendmail[0]).is_absolute():
+        cfg.sendmail[0] = str(configured_path(cfg.sendmail[0], base))
     return cfg

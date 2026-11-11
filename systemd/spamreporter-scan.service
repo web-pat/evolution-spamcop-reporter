@@ -3,6 +3,7 @@ Description=Capture and analyze local spam candidates (no sending)
 
 [Service]
 Type=oneshot
+SuccessExitStatus=2
 ExecStart=%h/.local/bin/spamreporter scan
 ExecStart=%h/.local/bin/spamreporter analyze
 ExecStart=%h/.local/bin/spamreporter cleanup

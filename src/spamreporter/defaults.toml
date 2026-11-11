@@ -10,6 +10,8 @@ daily_limit = 20 # Rolling 24-hour transport/editor attempts, including failures
 max_input_bytes = 10000000
 # Optional offline CSV: network,asn,operator. No external lookups are implemented.
 asn_csv = ""
+retain_statistics = false # Keep report-safe historical IP/ASN observations only if explicitly enabled.
+# Relative data_dir, source paths and asn_csv resolve beside this configuration file.
 
 [identities]
 default = "reporter@example.net" # Synthetic; replace with your sending identity.

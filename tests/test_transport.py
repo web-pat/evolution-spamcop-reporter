@@ -119,15 +119,16 @@ def test_concurrent_handoff_claim(store, cfg, ready, monkeypatch):
 
 
 def test_evolution_attaches_original_not_wrapper(store, cfg, ready, raw, monkeypatch):
-    def fake_run(command, **kwargs):
+    def fake_popen(command, **kwargs):
         query = parse_qs(urlsplit(command[1]).query)
         from pathlib import Path
 
         assert Path(query["attach"][0]).read_bytes() == raw
         assert cfg.recipient in command[1]
-        return SimpleNamespace(returncode=0)
+        assert kwargs["start_new_session"]
+        return SimpleNamespace(wait=lambda timeout: 0)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     assert send(store, cfg, ready, backend="evolution", confirm=True) == "draft_opened"
     with pytest.raises(ValueError):
         send(store, cfg, ready, backend="sendmail", confirm=True)

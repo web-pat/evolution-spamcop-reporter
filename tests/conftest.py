@@ -1,7 +1,22 @@
+import subprocess
+
 import pytest
 
 from spamreporter.config import Config, Source
 from spamreporter.store import Store
+
+
+@pytest.fixture(autouse=True)
+def no_real_evolution(monkeypatch):
+    """A transport refactor must never cause tests to open the user's desktop."""
+    real_popen = subprocess.Popen
+
+    def guarded(command, *args, **kwargs):
+        if command[0] == "evolution":
+            pytest.fail("Real Evolution launch attempted; mock the launcher in this test")
+        return real_popen(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", guarded)
 
 
 @pytest.fixture

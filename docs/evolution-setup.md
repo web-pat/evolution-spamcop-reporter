@@ -13,9 +13,14 @@
 
 For custom config paths, the global option comes first:
 `spamreporter --config /absolute/private/config.toml ingest --stdin --source evolution`.
-The executable reads binary stdin and commits SQLite locally. No parser, ASN lookup,
-composer or MTA is run on this path. Evolution's action may not expose failures
-clearly, so verify capture counts and permissions after configuring it.
+The executable reads binary stdin and durably spools it without accessing SQLite.
+No parser, ASN lookup, composer or MTA is run on this path. **stdout remains empty**:
+Camel uses non-empty stdout as a replacement message. Do not add `echo`, progress
+output or a wrapper that prints to stdout. `ingest --file` continues to print an ID
+for interactive use. `status`, `queue`, `scan`, `analyze` and other normal commands
+drain the spool before working; the user timer also does this. Dry-run commands
+do not drain it. Evolution's action discards stderr and does not reliably retry
+failures, so verify capture counts and permissions after configuring it.
 
 ## IMAP junk folders and existing mail
 
@@ -45,8 +50,10 @@ It percent-encodes the exact private original EML path. The outer prebuilt submi
 is not attached as a second-level wrapper. The original attachment remains on disk
 until the outcome is recorded and its retention period expires.
 
-The state becomes `draft_opened`, never `handed_off` merely because the process
-returned success. There is no supported unattended send command used here.
+The state becomes `draft_opened` when launch is requested without an immediate
+error, never `handed_off`. This is not proof the editor or attachment loaded. When
+Evolution is initially closed, its process may stay alive for the whole desktop
+session; the launcher returns without killing it. There is no unattended send here.
 Select the configured identity manually; automatic account selection is not claimed.
 Verify the recipient, remove any automatically configured CC/BCC copies, and check
 original Received headers, attachment MIME type
@@ -54,6 +61,9 @@ original Received headers, attachment MIME type
 If Evolution rejects the attachment or changes its representation, use the EML/local
 sendmail fallback **before launching a draft**, or resolve the existing draft first.
 An opened draft is intentionally not automatically reopened or re-sent.
+After verifying a draft was closed/discarded without sending, record a local note:
+`spamreporter status --id HASH --record cancelled --evidence note.txt --attest`.
+The terminal `cancelled` state permits retention cleanup, but never an automatic retry.
 
 ## Distribution and sandbox differences
 

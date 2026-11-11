@@ -13,6 +13,11 @@ MAX_MESSAGES = 20
 MAX_BYTES = 50_000
 
 
+def wire_size(payload: bytes) -> int:
+    """Budget for LF→CRLF transport normalization without modifying stored originals."""
+    return len(payload) + payload.count(b"\n") - payload.count(b"\r\n")
+
+
 def build(originals: list[bytes], sender: str, recipient: str) -> bytes:
     if not 1 <= len(originals) <= MAX_MESSAGES:
         raise ValueError("A submission must contain 1–20 original messages")
@@ -47,33 +52,51 @@ def build(originals: list[bytes], sender: str, recipient: str) -> bytes:
         # The separator CRLF belongs to the MIME boundary, not to the original.
         result += raw + b"\r\n"
     result += marker + b"--\r\n"
-    if len(result) > MAX_BYTES:
-        raise ValueError("Submission exceeds 50,000 bytes including MIME overhead")
+    if wire_size(result) > MAX_BYTES:
+        raise ValueError("Submission exceeds 50,000 bytes including MIME/CRLF overhead")
     return result
 
 
 def prepare(store: Store, cfg: Config, limit: int = 20, dry_run: bool = False) -> list[str]:
     prepared = []
-    with store.transaction():
-        rows = store.db.execute(
-            "SELECT * FROM messages WHERE state='queued' ORDER BY created LIMIT ?", (limit,)
-        ).fetchall()
-        for row in rows:
-            try:
-                sender, recipient = cfg.submission_addresses(row["approved_source"])
-                if row["raw"] is None:
-                    raise ValueError("Original expired")
-                payload = build([row["raw"]], sender, recipient)
-            except ValueError as exc:
-                if not dry_run:
-                    store.transition(row["hash"], "manual_review", str(exc))
+    rows = store.db.execute(
+        "SELECT hash FROM messages WHERE state='queued' AND purged=0 ORDER BY created LIMIT ?",
+        (limit,),
+    ).fetchall()
+    for item in rows:
+        row = store.db.execute("SELECT * FROM messages WHERE hash=?", (item["hash"],)).fetchone()
+        if row is None or row["state"] != "queued" or row["purged"]:
+            continue
+        error = ""
+        try:
+            sender, recipient = cfg.submission_addresses(row["approved_source"])
+            if row["raw"] is None:
+                raise ValueError("Original expired")
+            payload = build([row["raw"]], sender, recipient)
+        except ValueError as exc:
+            error = str(exc)
+        if dry_run:
+            if not error:
+                prepared.append(row["hash"])
+            continue
+        with store.transaction():
+            current = store.db.execute(
+                "SELECT state,purged,approved_source FROM messages WHERE hash=?", (row["hash"],)
+            ).fetchone()
+            if (
+                current is None
+                or current["state"] != "queued"
+                or current["purged"]
+                or current["approved_source"] != row["approved_source"]
+            ):
                 continue
-            prepared.append(row["hash"])
-            if dry_run:
+            if error:
+                store.transition(row["hash"], "manual_review", error)
                 continue
             store.db.execute(
                 "INSERT INTO submissions(hash,payload,sender,recipient) VALUES(?,?,?,?)",
                 (row["hash"], payload, sender, recipient),
             )
             store.transition(row["hash"], "prepared")
+            prepared.append(row["hash"])
     return prepared

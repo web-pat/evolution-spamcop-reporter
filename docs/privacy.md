@@ -9,7 +9,7 @@ disclosure which you must review in its interface.
 When using Evolution, check and remove any account-default CC/BCC recipients before
 manually sending; composer defaults are controlled by Evolution, not this application.
 
-The XDG data directory contains private SQLite BLOBs (complete original mail and
+The XDG data directory contains a private `intake/` spool and SQLite BLOBs (complete original mail and
 prepared envelopes), delivery records, metadata, state events and optional evidence.
 The database therefore contains addresses, message IDs, Received headers and body
 data even though standard reports omit them. Config holds the confidential SpamCop
@@ -18,6 +18,11 @@ backups. The application enforces 0700 storage directories, 0600 database/config
 new output files; CLI umask is 0077. Symlink inputs/exports are rejected. Do not put
 the database on a shared or network filesystem: SQLite WAL needs reliable local
 locking. The same Unix user remains trusted; this is not a hostile-user sandbox.
+Intake files contain base64-encoded originals (encoding is not encryption). They
+are removed after successful SQLite commit. Corrupt records or incomplete `.tmp`
+files remain for inspection, not silent deletion. A full purge refuses a nonempty
+intake directory; stop the filter and resolve its contents first. A normal command
+or the timer must run to consume pending intake and apply database retention.
 
 Standard logs show fingerprints, source labels and states, not original content or
 tokens. Source labels must be non-personal identifiers. Reports omit full addresses,
@@ -33,6 +38,15 @@ fingerprints, hashed delivery keys, source labels, timestamps and state audit ev
 to prevent duplicates. Reimporting an expired fingerprint does not restore its
 contents or make it eligible for submission. Active editor/transport states are
 retained so cleanup cannot remove data being used by an external process.
+Closed/discarded drafts can be explicitly recorded as cancelled with evidence.
+
+By default historical IP/ASN observations expire with metadata, as in the original
+release. Setting `retain_statistics=true` explicitly opts into snapshots of the
+report-safe fields before expiry: fingerprint, source, capture timestamp, domain
+pseudonyms, candidate IP, ASN/network/operator and attribution confidence/provenance.
+Full addresses, headers, bodies and submission tokens are excluded. These observations
+remain until `cleanup --purge-all --confirm`; disabling the setting stops new snapshots
+but does not erase existing ones. Full purge removes them with the other records.
 
 `cleanup --purge-all --confirm` removes all records and managed EML exports, and
 compacts/checkpoints the database. It refuses active drafts/transport claims.
@@ -43,7 +57,7 @@ application/editor processes, remove the dedicated config/data directories, and
 remove external reports and backups yourself. Original Evolution/source mail is
 always outside this application's deletion scope.
 
-SQLite secure_delete and WAL checkpointing reduce ordinary recoverable remnants;
+SQLite secure_delete and opportunistic WAL checkpointing reduce ordinary recoverable remnants;
 they do not promise physical erasure on SSDs, snapshots or backups. Use encryption
 and your storage system's deletion procedures where necessary. Exported files outside
 the managed directories are never automatically deleted.

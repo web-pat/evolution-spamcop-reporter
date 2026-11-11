@@ -8,9 +8,13 @@ distribution packages can be older. This project requires Python 3.12+, not GI.
 
 * [Evolution filter actions](https://gnome.pages.gitlab.gnome.org/evolution/help/mail-filters-actions.html)
   documents **Pipe to Program** as sending the message to an external application.
-  `ingest --stdin` reads bytes, hashes and commits them locally; no MIME analysis,
-  network activity or transport occurs on the filter path. Return status is not a
-  reliable Evolution retry mechanism: check imports during setup.
+  `ingest --stdin` durably spools bytes locally; no SQLite lock, MIME analysis,
+  network activity or transport occurs on the filter path. **stdout must be empty**:
+  the [Camel filter implementation](https://github.com/GNOME/evolution-data-server/blob/3.56.2/src/camel/camel-filter-driver.c)
+  reads pipe stdout as a replacement message and sets its modified flag. This was
+  verified in versions 3.54.3, 3.56.2 and 3.60.0, correcting the initial assumption
+  that stdout was ignored. Camel also discards child stderr; exit status is not a
+  dependable retry mechanism. Verify capture during setup.
 * [Using filters](https://gnome.pages.gitlab.gnome.org/evolution/help/mail-filters.html)
   explicitly restricts the IMAP automatic option to new Inbox messages. Server-side
   junk folders need manual Select All / Apply Filters (Ctrl+Y), or an export.
@@ -68,7 +72,7 @@ distribution packages can be older. This project requires Python 3.12+, not GI.
 
 ## Components and persistence
 
-`inputs` → `store` (fast ingest) → `analysis` → explicit review/queue →
+`inputs` / durable `intake` → `store` → `analysis` → explicit review/queue →
 `submission` → `transports`; `reporting` reads metadata. `config` and `cli`
 coordinate them. Standard library only at runtime. SQLite holds original BLOBs,
 metadata, separate deliveries, immutable prepared payloads, attempts and events.
@@ -83,8 +87,24 @@ submission per fingerprint prevents concurrent preparation. Original and submiss
 bytes are stored in the transaction, avoiding database/filesystem split commits.
 Private export files are materialized only on request.
 
+Filter intake uses private, atomically published JSON records with base64 original
+bytes and the intake timestamp. File and directory fsync precede success. `.tmp`
+files are never imported; interrupted writes remain available for local inspection.
+Normal non-dry-run CLI commands drain the spool, committing to SQLite before unlinking
+the record. Replaying an interrupted drain or concurrently consuming it is idempotent.
+Unreadable records are retained and diagnosed without logging contents. Source changes
+after acceptance do not discard pending messages. Existing intake timestamps are used
+for capture statistics. The scheduled scan consumes the spool even with no local sources.
+
+Schema 2 adds indexes for message, event and delivery lookup, plus an optional table
+of report-safe historical observations. Schema 1 upgrades in place. Analysis and MIME
+construction run outside write transactions; optimistic checks protect against
+concurrent processing or expiry. Unchanged analysis needs no write lock or raw BLOB
+read. Cleanup commits one message at a time and uses a nonblocking WAL checkpoint.
+
 States: captured → analyzed → queued → prepared → handing_off → handed_off →
-response_received → completed. `draft_opened`, `error`, `manual_review` are separate.
+response_received → completed. `draft_opened`, `error`, `manual_review`, `expired`
+and `cancelled` are separate. Expired records are not eligible for automatic sending.
 Every transition is audited. Completion/response records require a local evidence
 file and explicit human attestation; the application does not authenticate SpamCop
 replies or claim machine verification. Evidence hashes and bytes are retained.
@@ -96,6 +116,12 @@ manual_review, never automatically retried. Only failure to start the executable
 is safely retryable (`send --retry`). Resolve ambiguous outcomes by checking local
 MTA logs and recording evidence, not by blindly resending. Editor launch also
 claims the submission permanently until the user records what happened.
+Evolution uses an independent process session and only a brief non-destructive wait:
+a first instance can remain alive for the entire desktop session. The launcher never
+kills it on timeout. `draft_opened` means launch requested, not proof the asynchronous
+attachment loader succeeded. Sendmail retains its bounded wait and uncertain-outcome
+handling. An exported EML can be marked handed_off using verified local evidence;
+a cancelled/discarded draft can be recorded as cancelled without enabling resubmission.
 
 Queueing always requires explicit message IDs and confirmation of spam review.
 Automatic transport means delivery of already reviewed queued items only, with
@@ -114,3 +140,10 @@ cannot prove this. Never follow an arbitrary lower header because its `by` looks
 familiar. SPF/DKIM/DMARC are stored as unverified header claims, not recomputed.
 ASN lookup is optional local CSV longest-prefix matching with provenance. No DNS,
 HTTP, ASN service, telemetry or other networking is performed by the application.
+Received parsing uses a bounded, single token pass rather than a backtracking regex.
+Receiver names must match as whole tokens; multicast addresses and ambiguous syntax
+are unknown. Structured header defects are collected along with MIME defects.
+
+Submission sizing budgets for transport LF-to-CRLF expansion without changing the
+original attachment bytes, and is checked again at handoff for older prepared payloads.
+Transport-added outer headers remain outside application control.

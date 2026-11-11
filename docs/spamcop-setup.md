@@ -17,13 +17,15 @@ Official sources, checked 2026-11-11:
 * https://www.spamcop.net/fom-serve/cache/397.html — Mailhosts and forwarding.
 
 The application conservatively caps each fully serialized submission at 50,000
-bytes. v1 produces one original per envelope, never truncates a message, and stops
+bytes, budgeting for LF-to-CRLF transport expansion while preserving original bytes.
+v1 produces one original per envelope, never truncates a message, and stops
 oversized or binary/non-line-oriented messages for manual review. The original
 attachment bytes are not parsed and reserialized during construction. Base64 is
 not used for the `message/rfc822` container because RFC 2046 disallows it; existing
 encodings *inside* the original are untouched. Local MTA processing can normalize
 line endings or add outer transport headers; test your transport's behavior.
-The 50,000-byte check covers the generated message, not headers later added by MTAs.
+The 50,000-byte check covers the generated message after potential line-ending
+normalization, not headers later added by MTAs.
 Keep reasonable headroom if a transport adds substantial headers.
 
 Account-specific rate/age restrictions can also apply. Do not submit old backlog
@@ -76,6 +78,10 @@ event. The CLI does not authenticate SpamCop responses or infer completion from 
 subject line. `completed` means you have explicitly supplied and verified proof.
 For a manually sent Evolution draft, first record `handed_off` with sent-folder/MTA
 evidence, then the reply and completion. A prepared EML or opened editor is not proof.
+The same `handed_off` evidence command works for an EML exported by the application
+and subsequently sent using an external tool. It then blocks additional transport
+handoffs. For exports made by the original release, re-run the offline EML export
+command to register that export before recording evidence; it does not send mail.
 
 ## Recovery
 
@@ -85,9 +91,14 @@ evidence, then the reply and completion. A prepared EML or opened editor is not 
   accepted mail. A crash leaves `handing_off`. These are never retried automatically.
 * Inspect MTA logs and SpamCop replies. If handoff is established, record it with
   evidence. Do not reset SQLite state manually to force a resend.
-* A canceled/closed Evolution draft stays reserved; v1 deliberately provides no
-  automatic requeue of ambiguous drafts. Retain/recover the draft in Evolution or
-  establish its outcome before proceeding. This favors avoiding duplicate reports.
+* A canceled/closed Evolution draft stays reserved until you explicitly record
+  `cancelled` with a local note and `--attest`, having verified it was closed without
+  sending. That terminal state allows retention cleanup but no resubmission.
+  Never record cancellation while an editor or transport might still be using it.
+* Expired unsent submissions become `expired`; older purged `prepared` records are
+  also excluded from automatic selection. One unavailable automatic item does not
+  prevent later eligible items being considered; failures remain visible in stderr
+  and the exit status.
 
 Quick Reporting is deliberately absent: historical staff guidance requires
 Mailhosts and account-specific approval; current general eligibility could not be

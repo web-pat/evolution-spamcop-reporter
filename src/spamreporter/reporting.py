@@ -5,6 +5,7 @@ import hashlib
 import html
 import io
 import json
+import sqlite3
 from collections import Counter, defaultdict
 
 from .config import Config
@@ -22,38 +23,49 @@ def pseudonym(value: str) -> str:
     return "domain-" + hashlib.sha256(value.encode()).hexdigest()[:12] if value else "unknown"
 
 
+def observation(row: sqlite3.Row, cfg: Config) -> dict:
+    """The report-safe subset, also used for opt-in historical statistics."""
+    metadata = json.loads(row["metadata"])
+    candidate = metadata.get("origins", {}).get(row["source"], {})
+    source = cfg.sources.get(row["source"])
+    return {
+        "fingerprint": row["hash"],
+        "captured_utc": row["created"],
+        "source": row["source"],
+        "mailbox_domain": pseudonym(source.domain if source else ""),
+        "sender_domain_claim": pseudonym(metadata.get("sender_domain", "")),
+        "state": row["state"],
+        **{
+            key: candidate.get(key, "unknown")
+            for key in (
+                "ip",
+                "confidence",
+                "provenance",
+                "asn",
+                "network",
+                "operator",
+                "asn_provenance",
+            )
+        },
+    }
+
+
 def rows(store: Store, cfg: Config) -> list[dict]:
-    output = []
-    for row in store.db.execute(
-        "SELECT m.hash,m.state,m.metadata,d.source,d.created FROM messages m "
-        "JOIN deliveries d ON m.hash=d.hash WHERE m.purged=0 ORDER BY d.created,d.id"
-    ):
-        metadata = json.loads(row["metadata"])
-        candidate = metadata.get("origins", {}).get(row["source"], {})
-        source = cfg.sources.get(row["source"])
-        output.append(
-            {
-                "fingerprint": row["hash"],
-                "captured_utc": row["created"],
-                "source": row["source"],
-                "mailbox_domain": pseudonym(source.domain if source else ""),
-                "sender_domain_claim": pseudonym(metadata.get("sender_domain", "")),
-                "state": row["state"],
-                **{
-                    key: candidate.get(key, "unknown")
-                    for key in (
-                        "ip",
-                        "confidence",
-                        "provenance",
-                        "asn",
-                        "network",
-                        "operator",
-                        "asn_provenance",
-                    )
-                },
-            }
+    output = [
+        observation(row, cfg)
+        for row in store.db.execute(
+            "SELECT m.hash,m.state,m.metadata,d.source,d.created FROM messages m "
+            "JOIN deliveries d ON m.hash=d.hash WHERE m.purged=0 ORDER BY d.created,d.id"
         )
-    return output
+    ]
+    for row in store.db.execute(
+        "SELECT o.data,m.state FROM observations o JOIN deliveries d ON d.id=o.delivery_id "
+        "JOIN messages m ON m.hash=d.hash WHERE m.purged=1 ORDER BY d.created,d.id"
+    ):
+        saved = json.loads(row["data"])
+        saved["state"] = row["state"]
+        output.append(saved)
+    return sorted(output, key=lambda row: row["captured_utc"])
 
 
 def tables(store: Store, cfg: Config) -> dict[str, list[list[str]]]:

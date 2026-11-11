@@ -22,6 +22,8 @@ STATES = {
     "completed",
     "error",
     "manual_review",
+    "expired",
+    "cancelled",
 }
 
 
@@ -34,7 +36,7 @@ class Store:
         if path.stat().st_mode & 0o077:
             raise ValueError("Database must have mode 0600")
         self.db = sqlite3.connect(path, timeout=15, isolation_level=None)
-        if self.db.execute("PRAGMA user_version").fetchone()[0] not in {0, 1}:
+        if self.db.execute("PRAGMA user_version").fetchone()[0] not in {0, 1, 2}:
             self.db.close()
             raise ValueError("Unsupported database schema version; use a compatible release")
         self.db.row_factory = sqlite3.Row
@@ -69,7 +71,13 @@ class Store:
                 id INTEGER PRIMARY KEY, hash TEXT NOT NULL REFERENCES messages(hash),
                 digest TEXT NOT NULL, raw BLOB NOT NULL, kind TEXT NOT NULL
             );
-            PRAGMA user_version=1;
+            CREATE INDEX IF NOT EXISTS deliveries_hash_source ON deliveries(hash,source);
+            CREATE INDEX IF NOT EXISTS messages_state_created ON messages(state,created);
+            CREATE INDEX IF NOT EXISTS events_state_created ON events(state,created);
+            CREATE TABLE IF NOT EXISTS observations (
+                delivery_id INTEGER PRIMARY KEY REFERENCES deliveries(id), data TEXT NOT NULL
+            );
+            PRAGMA user_version=2;
         """)
 
     def close(self) -> None:
@@ -96,20 +104,39 @@ class Store:
             "INSERT INTO events(hash,state,detail) VALUES(?,?,?)", (digest, state, detail)
         )
 
-    def ingest(self, raw: bytes, source: str, key: str = "", limit: int = 10_000_000) -> str:
+    def ingest(
+        self,
+        raw: bytes,
+        source: str,
+        key: str = "",
+        limit: int = 10_000_000,
+        captured: str | None = None,
+    ) -> str:
         if not raw or len(raw) > limit:
             raise ValueError("Empty message or input size limit exceeded")
         digest = hashlib.sha256(raw).hexdigest()
         with self.transaction():
             inserted = self.db.execute(
-                "INSERT OR IGNORE INTO messages(hash,raw) VALUES(?,?)", (digest, raw)
+                "INSERT OR IGNORE INTO messages(hash,raw,created) "
+                "VALUES(?,?,COALESCE(?,strftime('%Y-%m-%dT%H:%M:%fZ','now')))",
+                (digest, raw, captured),
             ).rowcount
             if inserted:
                 self.transition(digest, "captured")
             self.db.execute(
-                "INSERT OR IGNORE INTO deliveries(hash,source,delivery_key) VALUES(?,?,?)",
-                (digest, source, key or digest),
+                "INSERT OR IGNORE INTO deliveries(hash,source,delivery_key,created) "
+                "VALUES(?,?,?,COALESCE(?,strftime('%Y-%m-%dT%H:%M:%fZ','now')))",
+                (digest, source, key or digest, captured),
             )
+            if captured:
+                self.db.execute(
+                    "UPDATE messages SET created=min(created,?) WHERE hash=?", (captured, digest)
+                )
+                self.db.execute(
+                    "UPDATE deliveries SET created=min(created,?) "
+                    "WHERE hash=? AND source=? AND delivery_key=?",
+                    (captured, digest, source, key or digest),
+                )
         return digest
 
     def message(self, digest: str) -> sqlite3.Row:

@@ -13,6 +13,7 @@ from pathlib import Path
 from .analysis import analyze
 from .config import Config, config_path, load, private_dir, private_write
 from .inputs import bounded_read, read_file, scan
+from .intake import capture, drain
 from .maintenance import cleanup
 from .reporting import render_csv, render_html, terminal
 from .store import Store
@@ -33,7 +34,9 @@ def parser() -> argparse.ArgumentParser:
     ingest = commands.add_parser("ingest", help="Capture bytes locally; never analyze or send")
     input_group = ingest.add_mutually_exclusive_group(required=True)
     input_group.add_argument(
-        "--stdin", action="store_true", help="Read binary RFC 5322 bytes from stdin"
+        "--stdin",
+        action="store_true",
+        help="Durably spool binary RFC 5322 bytes; stdout stays silent",
     )
     input_group.add_argument("--file", type=Path, help="Read a single EML file")
     ingest.add_argument("--source", required=True, help="Enabled configured source name")
@@ -87,7 +90,9 @@ def parser() -> argparse.ArgumentParser:
         "status", help="Show state counts or record human-reviewed evidence"
     )
     status.add_argument("--id", help="Show state/event history for this fingerprint")
-    status.add_argument("--record", choices=["handed_off", "response_received", "completed"])
+    status.add_argument(
+        "--record", choices=["handed_off", "response_received", "completed", "cancelled"]
+    )
     status.add_argument(
         "--evidence", type=Path, help="Local proof: reply EML, MTA receipt or report record"
     )
@@ -165,8 +170,19 @@ def run(args: argparse.Namespace) -> int:
         print("Initialized. Edit the private config and run doctor; sending is disabled.")
         return 0
     cfg = load(args.config)
+    if args.command == "ingest" and args.stdin:
+        # Camel interprets stdout as a replacement message. Never print here, and
+        # never wait for a SQLite writer while Evolution is feeding the pipe.
+        capture(
+            cfg, bounded_read(sys.stdin.buffer, cfg.max_input_bytes), args.source, args.delivery_id
+        )
+        return 0
     store = Store(cfg.data_dir)
     try:
+        if not getattr(args, "dry_run", False):
+            _, failures = drain(store, cfg)
+            if failures:
+                print(f"Intake: {failures} unreadable records retained for review", file=sys.stderr)
         return dispatch(args, cfg, store)
     finally:
         store.close()
@@ -177,6 +193,14 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
     if command == "doctor":
         return doctor(cfg, args.config, store)
     if command == "ingest":
+        if args.stdin:
+            capture(
+                cfg,
+                bounded_read(sys.stdin.buffer, cfg.max_input_bytes),
+                args.source,
+                args.delivery_id,
+            )
+            return 0
         cfg.source(args.source)
         raw = (
             bounded_read(sys.stdin.buffer, cfg.max_input_bytes)
@@ -194,8 +218,18 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
         for source in sources:
             if not source.enabled or source.kind == "stdin":
                 continue
+
+            def input_error(error: Exception, name: str = source.name) -> None:
+                nonlocal failures
+                failures += 1
+                print(
+                    f"Source {name}: skipped unreadable, changed or oversized input "
+                    f"({type(error).__name__})",
+                    file=sys.stderr,
+                )
+
             try:
-                for key, raw in scan(source, cfg.max_input_bytes):
+                for key, raw in scan(source, cfg.max_input_bytes, on_error=input_error):
                     if count >= args.limit:
                         break
                     digest = hashlib.sha256(raw).hexdigest()
@@ -213,7 +247,8 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
                 )
                 failures += 1
         print(f"Captured {count} new deliveries; {failures} source errors")
-        return bool(failures)
+        # A distinct partial-failure status lets the user service continue maintenance.
+        return 2 if failures else 0
     elif command == "analyze":
         print(f"Analyzed {analyze(store, cfg)} messages")
     elif command == "queue":
@@ -251,8 +286,9 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
             ids = [
                 r[0]
                 for r in store.db.execute(
-                    "SELECT hash,approved_source FROM messages "
-                    "WHERE state='prepared' ORDER BY created"
+                    "SELECT m.hash,m.approved_source FROM messages m "
+                    "JOIN submissions s ON s.hash=m.hash WHERE m.state='prepared' "
+                    "AND m.purged=0 AND s.payload IS NOT NULL ORDER BY m.created"
                 )
                 if r[1] in cfg.sources
                 and cfg.sources[r[1]].enabled
@@ -262,16 +298,23 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
             raise ValueError("Supply 1–20 fingerprints, or --automatic for reviewed prepared work")
         failures = 0
         for digest in ids:
-            outcome = send(
-                store,
-                cfg,
-                digest,
-                backend=args.backend,
-                confirm=args.confirm,
-                automatic=args.automatic,
-                retry=args.retry,
-                dry_run=args.dry_run,
-            )
+            try:
+                outcome = send(
+                    store,
+                    cfg,
+                    digest,
+                    backend=args.backend,
+                    confirm=args.confirm,
+                    automatic=args.automatic,
+                    retry=args.retry,
+                    dry_run=args.dry_run,
+                )
+            except ValueError as exc:
+                if not args.automatic:
+                    raise
+                print(f"{digest}: {exc}", file=sys.stderr)
+                failures += 1
+                continue
             print(digest, outcome)
             failures += outcome in {"error", "manual_review"}
         return bool(failures)
@@ -313,6 +356,12 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
             if args.dry_run:
                 print("Would purge all records and application-owned exports")
                 return 0
+            intake = cfg.data_dir / "intake"
+            if intake.exists() and any(intake.iterdir()):
+                raise ValueError(
+                    "Pending or incomplete intake remains; stop the filter and "
+                    "inspect the private intake directory before purging"
+                )
             with store.transaction():
                 if store.db.execute(
                     "SELECT 1 FROM messages WHERE state IN ('handing_off','draft_opened')"
@@ -324,7 +373,14 @@ def dispatch(args: argparse.Namespace, cfg: Config, store: Store) -> int:
                         private_dir(directory)
                         for row in store.db.execute("SELECT hash FROM messages"):
                             (directory / f"{row['hash']}.eml").unlink(missing_ok=True)
-                for table in ("evidence", "events", "submissions", "deliveries", "messages"):
+                for table in (
+                    "observations",
+                    "evidence",
+                    "events",
+                    "submissions",
+                    "deliveries",
+                    "messages",
+                ):
                     store.db.execute(f"DELETE FROM {table}")
             store.db.execute("VACUUM")
             store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")

@@ -60,7 +60,10 @@ def test_real_stdin_process_offline(isolated, raw):
         capture_output=True,
         check=True,
     )
-    assert len(result.stdout.strip()) == 64
+    assert result.stdout == b""  # Camel would interpret any output as a replacement email.
+    assert list((isolated / "data/spamreporter/intake").glob("*.json"))
+    subprocess.run([*command, "analyze"], env=env, capture_output=True, check=True)
+    assert not list((isolated / "data/spamreporter/intake").glob("*.json"))
 
 
 def test_missing_config_and_private_permissions(isolated, monkeypatch):

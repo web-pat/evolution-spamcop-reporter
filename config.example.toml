@@ -8,6 +8,8 @@ sendmail = ["/usr/sbin/sendmail", "-i"] # Argument array; no shell, no -t, no re
 daily_limit = 20 # Rolling 24h attempt limit, including editor launches and failures.
 max_input_bytes = 10000000
 asn_csv = "" # Optional local CSV: network,asn,operator. No network lookups.
+retain_statistics = false # Opt in to keeping report-safe IP/ASN observations after expiry.
+# Relative data_dir, source paths and asn_csv resolve beside this config, not the working directory.
 # data_dir = "~/private-spamreporter" # Default follows XDG_DATA_HOME.
 
 [identities]

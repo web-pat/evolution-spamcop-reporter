@@ -79,8 +79,12 @@ mit dem absoluten Programmpfad konfigurieren:
 /home/DEIN-BENUTZER/.local/bin/spamreporter ingest --stdin --source evolution
 ```
 
-Den tatsächlichen Pfad zeigt `command -v spamreporter`. Der Aufruf speichert nur
-lokal; Analyse und Versand blockieren Evolution nicht.
+Den tatsächlichen Pfad zeigt `command -v spamreporter`. Der Aufruf speichert die
+Nachricht dauerhaft im privaten Verzeichnis `intake/`, ohne auf SQLite zu warten.
+**stdout bleibt leer:** Camel interpretiert Programmausgaben als Ersatznachricht.
+Auch ein eigener Filter-Wrapper darf dort keine Statusmeldungen ausgeben.
+`scan`, `analyze`, `status` und andere reguläre Aufrufe übernehmen den Eingang in
+SQLite; der Timer erledigt dies automatisch. `ingest --file` gibt weiterhin den Hash aus.
 
 **Automatische IMAP-Filter betreffen neue Nachrichten im Posteingang.** Serverseitig
 befüllte Spamordner benötigen manuelles Anwenden mit Strg+Y oder einen lokalen
@@ -116,6 +120,16 @@ separat löschen. Berichte enthalten keine persönlichen Mailadressen, aber IPs 
 lokale Beobachtungen; sie sind keine weltweite Spamstatistik.
 
 Keine Telemetrie, keine externe Analytik, keine Ausführung von Anhängen.
+Relative TOML-Pfade werden relativ zur Konfigurationsdatei aufgelöst. Beim Upgrade
+einen bisher relativen Datenpfad vorher auf den bestehenden absoluten Pfad setzen;
+die Datenbank wird unter Erhalt ihrer Inhalte auf Schema 2 aktualisiert.
+Einzelne fehlerhafte Dateien blockieren den Scan nicht mehr. Abgelaufene ungesendete
+Einreichungen erhalten den Status `expired`. Für geschlossene, nachweislich nicht
+gesendete Entwürfe steht `status --record cancelled --id HASH --evidence notiz.txt
+--attest` bereit; dadurch werden sie nicht erneut versendbar.
+Mit `retain_statistics=true` können IP-/ASN-Beobachtungen nach Inhaltsablauf erhalten
+bleiben. Standardmäßig ist das deaktiviert. Gespeicherte historische Beobachtungen
+bleiben bis zur vollständigen Löschung erhalten und enthalten keine Originalheader.
 Weitere Hinweise: [Architektur](docs/architecture.md),
 [Evolution-Einrichtung](docs/evolution-setup.md), [Datenschutz](docs/privacy.md),
 [Fehlersuche](docs/troubleshooting.md).
